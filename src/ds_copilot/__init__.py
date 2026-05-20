@@ -1,6 +1,6 @@
 """DAG-aware AI copilot for reactive data-science notebooks."""
 
-from ds_copilot.agent import LeakageAudit, Plan, ProposedCell, plan
+from ds_copilot.agent import CostReport, LeakageAudit, Plan, ProposedCell, plan
 from ds_copilot.dag import (
     CellNode,
     NotebookGraph,
@@ -23,6 +23,7 @@ __version__ = "0.0.1"
 __all__ = [
     "CellNode",
     "ColumnProfile",
+    "CostReport",
     "DecisionEvent",
     "DecisionLog",
     "LeakageAudit",

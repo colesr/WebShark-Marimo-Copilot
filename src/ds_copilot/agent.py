@@ -13,6 +13,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from typing import Any, Literal
 
 import anthropic
@@ -55,6 +56,27 @@ class LeakageAudit(BaseModel):
     rationale: str
 
 
+class CostReport(BaseModel):
+    """Per-call cost + token telemetry, populated after plan() returns.
+
+    `cost_usd` is what the call would cost at API rates. For the claude-cli
+    backend (subscription auth), it's informational -- subscription users
+    are billed by monthly quota, not per call -- but lets you forecast what
+    the same workload would cost on the API.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    backend: str
+    model: str
+    duration_s: float
+    input_tokens: int
+    output_tokens: int
+    cache_creation_tokens: int
+    cache_read_tokens: int
+    cost_usd: float | None
+
+
 class Plan(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -63,6 +85,40 @@ class Plan(BaseModel):
     cells: list[ProposedCell]
     overall_warnings: list[str]
     leakage_audit: LeakageAudit | None = None
+    cost_report: CostReport | None = None
+
+
+# Per-million-token prices (input, output) for Anthropic-cost calculation.
+# Cache reads cost ~0.1x input; cache writes cost ~1.25x input.
+_PRICES_PER_M = {
+    "claude-opus-4-7": (5.00, 25.00),
+    "claude-opus-4-6": (5.00, 25.00),
+    "claude-opus-4-5": (5.00, 25.00),
+    "claude-sonnet-4-6": (3.00, 15.00),
+    "claude-sonnet-4-5": (3.00, 15.00),
+    "claude-haiku-4-5": (1.00, 5.00),
+}
+
+
+def _estimate_cost_usd(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_creation_tokens: int,
+    cache_read_tokens: int,
+) -> float | None:
+    """Best-effort dollar estimate from token counts. Returns None if the
+    model isn't in our price table."""
+    prices = _PRICES_PER_M.get(model)
+    if prices is None:
+        return None
+    in_per_m, out_per_m = prices
+    return (
+        (input_tokens * in_per_m)
+        + (cache_creation_tokens * in_per_m * 1.25)
+        + (cache_read_tokens * in_per_m * 0.1)
+        + (output_tokens * out_per_m)
+    ) / 1_000_000
 
 
 SYSTEM_PROMPT = """\
@@ -332,6 +388,7 @@ def _plan_via_anthropic(
     if client is None:
         client = _build_anthropic_client()
 
+    started = time.monotonic()
     try:
         response = client.messages.create(
             model=model,
@@ -351,6 +408,7 @@ def _plan_via_anthropic(
         )
     except anthropic.AuthenticationError as e:
         raise RuntimeError(f"Anthropic authentication failed: {e.message}") from e
+    duration = time.monotonic() - started
 
     tool_block = next(
         (
@@ -370,8 +428,26 @@ def _plan_via_anthropic(
             f"request_id={getattr(response, '_request_id', None)!r}"
         )
 
+    usage = response.usage
+    in_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+    out_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+    cache_create = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
+    cache_read = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+    cost_report = CostReport(
+        backend="anthropic",
+        model=model,
+        duration_s=duration,
+        input_tokens=in_tokens,
+        output_tokens=out_tokens,
+        cache_creation_tokens=cache_create,
+        cache_read_tokens=cache_read,
+        cost_usd=_estimate_cost_usd(
+            model, in_tokens, out_tokens, cache_create, cache_read
+        ),
+    )
+
     try:
-        return Plan(goal=goal, **tool_block.input)
+        return Plan(goal=goal, cost_report=cost_report, **tool_block.input)
     except ValidationError as e:
         raise RuntimeError(f"Plan failed pydantic validation: {e}") from e
 
@@ -415,6 +491,7 @@ def _plan_via_claude_cli(
     # backend specifically because we don't have API credits.
     env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
 
+    started = time.monotonic()
     try:
         completed = subprocess.run(
             args,
@@ -430,6 +507,7 @@ def _plan_via_claude_cli(
             f"claude CLI timed out after {timeout_s}s. "
             "Try lower effort or a simpler prompt."
         ) from e
+    duration = time.monotonic() - started
 
     if completed.returncode != 0:
         # Errors may land on either stream; surface both.
@@ -461,8 +539,26 @@ def _plan_via_claude_cli(
             f"result text was: {str(result.get('result', ''))[:500]}"
         )
 
+    usage = result.get("usage") or {}
+    cost_report = CostReport(
+        backend="claude-cli",
+        model=model,
+        duration_s=duration,
+        input_tokens=int(usage.get("input_tokens", 0) or 0),
+        output_tokens=int(usage.get("output_tokens", 0) or 0),
+        cache_creation_tokens=int(
+            usage.get("cache_creation_input_tokens", 0) or 0
+        ),
+        cache_read_tokens=int(usage.get("cache_read_input_tokens", 0) or 0),
+        # The CLI computes its own total at API rates; informational only
+        # for subscription users.
+        cost_usd=float(result["total_cost_usd"])
+        if result.get("total_cost_usd") is not None
+        else None,
+    )
+
     try:
-        return Plan(goal=goal, **structured)
+        return Plan(goal=goal, cost_report=cost_report, **structured)
     except ValidationError as e:
         raise RuntimeError(f"Plan from claude CLI failed validation: {e}") from e
 

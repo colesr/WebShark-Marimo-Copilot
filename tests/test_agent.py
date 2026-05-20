@@ -9,10 +9,12 @@ import pytest
 
 from ds_copilot.agent import (
     PLAN_TOOL,
+    CostReport,
     LeakageAudit,
     Plan,
     ProposedCell,
     _build_user_prompt,
+    _estimate_cost_usd,
     plan,
 )
 from ds_copilot.profiler import profile
@@ -33,16 +35,32 @@ class _FakeTextBlock:
         self.text = text
 
 
+class _FakeUsage:
+    def __init__(
+        self,
+        input_tokens: int = 100,
+        output_tokens: int = 50,
+        cache_creation_input_tokens: int = 0,
+        cache_read_input_tokens: int = 0,
+    ) -> None:
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+        self.cache_creation_input_tokens = cache_creation_input_tokens
+        self.cache_read_input_tokens = cache_read_input_tokens
+
+
 class _FakeResponse:
     def __init__(
         self,
         content: list,
         stop_reason: str = "tool_use",
         request_id: str = "req_test",
+        usage: _FakeUsage | None = None,
     ) -> None:
         self.content = content
         self.stop_reason = stop_reason
         self._request_id = request_id
+        self.usage = usage or _FakeUsage()
 
 
 class _FakeMessages:
@@ -368,6 +386,101 @@ def test_plan_tool_schema_is_strict_compatible() -> None:
     audit_obj = next(s for s in leak_schema["anyOf"] if s["type"] == "object")
     assert set(audit_obj["properties"]) == set(audit_obj["required"])
     assert audit_obj["additionalProperties"] is False
+
+
+def test_anthropic_backend_populates_cost_report(tiny_profile) -> None:
+    fake = _FakeAnthropic(
+        _FakeResponse(
+            content=[_FakeToolUseBlock(_valid_plan_input())],
+            usage=_FakeUsage(
+                input_tokens=200,
+                output_tokens=400,
+                cache_creation_input_tokens=1000,
+                cache_read_input_tokens=500,
+            ),
+        )
+    )
+    p = plan(
+        goal="x",
+        profile=tiny_profile,
+        backend="anthropic",
+        model="claude-opus-4-7",
+        client=fake,
+    )
+    assert p.cost_report is not None
+    assert isinstance(p.cost_report, CostReport)
+    assert p.cost_report.backend == "anthropic"
+    assert p.cost_report.model == "claude-opus-4-7"
+    assert p.cost_report.input_tokens == 200
+    assert p.cost_report.output_tokens == 400
+    assert p.cost_report.cache_creation_tokens == 1000
+    assert p.cost_report.cache_read_tokens == 500
+    # Estimated from prices: ((200 + 1000*1.25 + 500*0.1) * 5 + 400 * 25) / 1M
+    assert p.cost_report.cost_usd is not None
+    assert p.cost_report.cost_usd > 0
+    assert p.cost_report.duration_s >= 0
+
+
+def test_claude_cli_backend_populates_cost_report(
+    monkeypatch: pytest.MonkeyPatch, tiny_profile
+) -> None:
+    cli_json = {
+        "type": "result",
+        "is_error": False,
+        "result": "Plan submitted.",
+        "structured_output": _valid_plan_input(),
+        "total_cost_usd": 0.214,
+        "usage": {
+            "input_tokens": 12,
+            "output_tokens": 320,
+            "cache_creation_input_tokens": 31000,
+            "cache_read_input_tokens": 0,
+        },
+    }
+
+    def fake_run(args, **kwargs):
+        class _Completed:
+            returncode = 0
+            stdout = json.dumps(cli_json)
+            stderr = ""
+
+        return _Completed()
+
+    import ds_copilot.agent as agent_module
+
+    monkeypatch.setattr(agent_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        agent_module.shutil, "which", lambda name: "/fake/path/claude"
+    )
+
+    p = plan(
+        goal="x",
+        profile=tiny_profile,
+        backend="claude-cli",
+        model="claude-opus-4-7",
+    )
+    assert p.cost_report is not None
+    assert p.cost_report.backend == "claude-cli"
+    assert p.cost_report.input_tokens == 12
+    assert p.cost_report.output_tokens == 320
+    assert p.cost_report.cache_creation_tokens == 31000
+    assert p.cost_report.cost_usd == pytest.approx(0.214)
+
+
+def test_estimate_cost_usd_known_model() -> None:
+    # Opus 4.7: $5 input, $25 output per 1M; cache writes 1.25x; cache reads 0.1x
+    cost = _estimate_cost_usd(
+        model="claude-opus-4-7",
+        input_tokens=1_000_000,
+        output_tokens=1_000_000,
+        cache_creation_tokens=0,
+        cache_read_tokens=0,
+    )
+    assert cost == pytest.approx(30.0)  # 5 + 25
+
+
+def test_estimate_cost_usd_unknown_model_returns_none() -> None:
+    assert _estimate_cost_usd("not-a-model", 100, 100, 0, 0) is None
 
 
 def test_plan_parses_with_populated_leakage_audit(tiny_profile) -> None:

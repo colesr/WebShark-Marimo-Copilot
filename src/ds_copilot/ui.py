@@ -41,6 +41,26 @@ def _is_training_cell(code: str) -> bool:
     return bool(_TRAINING_PATTERN.search(code))
 
 
+def _format_cost_line(cost) -> str:
+    """Compact 'duration · tokens · $cost' line for the widget header."""
+    total_input = cost.input_tokens + cost.cache_creation_tokens + cost.cache_read_tokens
+    cache_share = (
+        100 * cost.cache_read_tokens / total_input
+        if total_input
+        else 0
+    )
+    bits = [
+        f"⏱ {cost.duration_s:.1f}s",
+        f"{total_input:,} in / {cost.output_tokens:,} out tokens "
+        f"({cache_share:.0f}% cache hit)",
+        f"`{cost.model}` · effort hidden by Claude Code",
+    ]
+    if cost.cost_usd is not None:
+        tag = " (subscription — informational)" if cost.backend == "claude-cli" else ""
+        bits.append(f"~${cost.cost_usd:.3f}{tag}")
+    return " · ".join(bits)
+
+
 class PlannerWidget:
     """Renderable, applicable plan-then-approve UI for a Marimo notebook.
 
@@ -110,6 +130,8 @@ class PlannerWidget:
 
         elements: list[Any] = []
         elements.append(mo.md(f"## Plan: *{self.plan.goal}*"))
+        if self.plan.cost_report is not None:
+            elements.append(mo.md(_format_cost_line(self.plan.cost_report)))
         elements.append(mo.md(f"**Summary.** {self.plan.summary}"))
 
         if self.plan.overall_warnings:
@@ -432,6 +454,11 @@ def planner_widget(
             "leakage_audit": (
                 plan_obj.leakage_audit.model_dump()
                 if plan_obj.leakage_audit is not None
+                else None
+            ),
+            "cost_report": (
+                plan_obj.cost_report.model_dump()
+                if plan_obj.cost_report is not None
                 else None
             ),
         },
