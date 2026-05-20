@@ -138,7 +138,7 @@ def test_plan_request_uses_correct_parameters(tiny_profile) -> None:
 
     assert kwargs["model"] == "claude-opus-4-7"
     assert kwargs["thinking"] == {"type": "adaptive"}
-    assert kwargs["output_config"] == {"effort": "high"}
+    assert kwargs["output_config"] == {"effort": "medium"}
     # No removed-on-4.7 sampling params leaked into the request
     assert "temperature" not in kwargs
     assert "top_p" not in kwargs
@@ -278,7 +278,7 @@ def test_claude_cli_backend_parses_structured_output(
     assert "--model" in args
     assert args[args.index("--model") + 1] == "claude-opus-4-7"
     assert "--effort" in args
-    assert args[args.index("--effort") + 1] == "high"
+    assert args[args.index("--effort") + 1] == "medium"
     assert "--no-session-persistence" in args
     # stdin redirected to DEVNULL so claude doesn't wait 3s for input
     assert captured["kwargs"].get("stdin") is subprocess.DEVNULL

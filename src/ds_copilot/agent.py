@@ -267,7 +267,7 @@ def plan(
     *,
     backend: Backend = DEFAULT_BACKEND,
     model: str = DEFAULT_MODEL,
-    effort: str = "high",
+    effort: str = "medium",
     client: anthropic.Anthropic | None = None,
     claude_executable: str | None = None,
     timeout_s: int = 300,

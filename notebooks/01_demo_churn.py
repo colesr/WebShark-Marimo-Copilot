@@ -69,7 +69,9 @@ def _():
 
 @app.cell
 def _(df, mo):
-    mo.md(f"### Dataset shape: {df.shape} — preview below")
+    mo.md(f"""
+    ### Dataset shape: {df.shape} — preview below
+    """)
     return
 
 
@@ -136,7 +138,9 @@ def _(df):
                 "internet_service, churn_score, churned"
             ),
         ],
-        effort="high",
+        # effort defaults to "medium" -- bench shows it catches the leak at
+        # the same rate as "high" while running ~2.4x faster. Bump to
+        # "high" or "xhigh" when correctness matters more than wait time.
     )
     return (planner,)
 
@@ -169,7 +173,9 @@ async def _(planner):
 
 @app.cell
 def _(mo, result):
-    mo.md(f"```\n{result}\n```")
+    mo.md(f"""
+    ```\n{result}\n```
+    """)
     return
 
 
@@ -236,7 +242,81 @@ def _():
             return f"applied {n_applied} cells (override={override})"
         return ""
 
-    return (_summarize_event,)
+    return
+
+
+@app.cell(hide_code=True)
+def _(df, mo):
+    leaking_cols = ['customer_id', 'churn_score']
+    feature_cols = [c for c in df.columns if c not in leaking_cols + ['churned']]
+    categorical_cols = ['contract_type', 'internet_service']
+    numeric_cols = ['tenure_months', 'monthly_charges']
+    mo.md(f"**Dropped (leakage / ID):** {leaking_cols}\n\n**Features:** {feature_cols}\n\n**Target:** churned")
+    return categorical_cols, feature_cols
+
+
+@app.cell(hide_code=True)
+def _(categorical_cols, df, feature_cols, mo):
+    X_df = df.select(feature_cols).to_dummies(columns=categorical_cols)
+    y = df['churned'].to_numpy()
+    X = X_df.to_numpy()
+    mo.md(f"X shape: {X.shape}  |  y positive rate: {y.mean():.3f}\n\nEncoded columns:\n\n{X_df.columns}")
+    return X, y
+
+
+@app.cell(hide_code=True)
+def _(X, mo, y):
+    from sklearn.model_selection import train_test_split
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, stratify=y, random_state=42
+    )
+    mo.md(f"Train: {X_train.shape}, pos rate {y_train.mean():.3f}  \nTest:  {X_test.shape}, pos rate {y_test.mean():.3f}")
+    return X_test, X_train, y_test, y_train
+
+
+@app.cell(hide_code=True)
+def _(X_train, mo, y_train):
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import StandardScaler
+
+    model = Pipeline([
+        ('scale', StandardScaler()),
+        ('lr', LogisticRegression(max_iter=1000, random_state=42)),
+    ])
+    model.fit(X_train, y_train)
+    mo.md(f"Fitted. Train accuracy: {model.score(X_train, y_train):.3f}")
+    return (model,)
+
+
+@app.cell(hide_code=True)
+def _(X_test, mo, model, y_test):
+    from sklearn.metrics import accuracy_score, roc_auc_score, confusion_matrix
+
+    y_pred = model.predict(X_test)
+    y_proba = model.predict_proba(X_test)[:, 1]
+
+    acc = accuracy_score(y_test, y_pred)
+    auc = roc_auc_score(y_test, y_proba)
+    cm = confusion_matrix(y_test, y_pred)
+
+    mo.md(
+        f"**Test accuracy:** {acc:.3f}  \n"
+        f"**Test ROC AUC:** {auc:.3f}  \n\n"
+        f"**Confusion matrix** (rows=true, cols=pred):  \n\n"
+        f"|        | pred 0 | pred 1 |\n"
+        f"|--------|--------|--------|\n"
+        f"| true 0 | {cm[0,0]} | {cm[0,1]} |\n"
+        f"| true 1 | {cm[1,0]} | {cm[1,1]} |\n"
+    )
+    return
+
+
+@app.cell
+def _():
+    from ds_copilot import dag_widget
+    dag_widget("notebooks/01_demo_churn.py")
+    return
 
 
 if __name__ == "__main__":

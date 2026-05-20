@@ -355,9 +355,11 @@ def planner_widget(
 ) -> PlannerWidget:
     """Build a profile, ask Claude for a plan, return a renderable widget.
 
-    Blocks for ~60-90s while the plan is generated (Opus 4.7 + high effort
-    via the claude-cli backend). For faster iteration during dev, pass
-    `effort="medium"` or `backend="anthropic"` (with API credits).
+    Blocks for ~30-45s on a warm Claude Code cache (Opus 4.7 + medium
+    effort, claude-cli backend). First call after a fresh start can take
+    ~60-90s while Claude Code's standard system prompt is cached.
+    Knobs for faster iteration: `effort="low"`, `model="claude-sonnet-4-6"`,
+    or both. For thoroughness on hard problems, `effort="high"` or "xhigh".
 
     Records three decision events to `decision_log_path`:
         plan_requested  -- before the agent call.
