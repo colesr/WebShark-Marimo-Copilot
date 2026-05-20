@@ -9,6 +9,7 @@ import pytest
 
 from ds_copilot.agent import (
     PLAN_TOOL,
+    LeakageAudit,
     Plan,
     ProposedCell,
     _build_user_prompt,
@@ -360,3 +361,53 @@ def test_plan_tool_schema_is_strict_compatible() -> None:
     cell_schema = schema["properties"]["cells"]["items"]
     assert set(cell_schema["properties"]) == set(cell_schema["required"])
     assert cell_schema["additionalProperties"] is False
+
+    # leakage_audit accepts the audit object or null (anyOf)
+    leak_schema = schema["properties"]["leakage_audit"]
+    assert "anyOf" in leak_schema
+    audit_obj = next(s for s in leak_schema["anyOf"] if s["type"] == "object")
+    assert set(audit_obj["properties"]) == set(audit_obj["required"])
+    assert audit_obj["additionalProperties"] is False
+
+
+def test_plan_parses_with_populated_leakage_audit(tiny_profile) -> None:
+    payload = _valid_plan_input()
+    payload["leakage_audit"] = {
+        "target": "churned",
+        "columns_to_drop": ["customer_id"],
+        "transformations_to_audit": [
+            "z-score within contract_type uses train means at inference",
+        ],
+        "training_safe": True,
+        "rationale": (
+            "customer_id is dropped; no other features look like leakage."
+        ),
+    }
+    fake = _FakeAnthropic(_FakeResponse(content=[_FakeToolUseBlock(payload)]))
+    p = plan(
+        goal="baseline churn",
+        profile=tiny_profile,
+        backend="anthropic",
+        client=fake,
+    )
+    assert isinstance(p.leakage_audit, LeakageAudit)
+    assert p.leakage_audit.target == "churned"
+    assert p.leakage_audit.training_safe is True
+    assert "customer_id" in p.leakage_audit.columns_to_drop
+
+
+def test_plan_parses_with_null_leakage_audit(tiny_profile) -> None:
+    payload = _valid_plan_input()
+    payload["leakage_audit"] = None
+    fake = _FakeAnthropic(_FakeResponse(content=[_FakeToolUseBlock(payload)]))
+    p = plan(goal="x", profile=tiny_profile, backend="anthropic", client=fake)
+    assert p.leakage_audit is None
+
+
+def test_plan_parses_without_leakage_audit_field(tiny_profile) -> None:
+    """Backwards-compat: pydantic default is None when field is omitted."""
+    payload = _valid_plan_input()
+    assert "leakage_audit" not in payload
+    fake = _FakeAnthropic(_FakeResponse(content=[_FakeToolUseBlock(payload)]))
+    p = plan(goal="x", profile=tiny_profile, backend="anthropic", client=fake)
+    assert p.leakage_audit is None

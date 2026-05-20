@@ -38,6 +38,23 @@ class ProposedCell(BaseModel):
     warnings: list[str]
 
 
+class LeakageAudit(BaseModel):
+    """Agent's verdict on whether the plan is safe to train on.
+
+    Only populated when the user passed a target column to plan(). When
+    `training_safe` is False, the planner widget blocks model-training
+    cells from being applied without explicit override.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    target: str
+    columns_to_drop: list[str]
+    transformations_to_audit: list[str]
+    training_safe: bool
+    rationale: str
+
+
 class Plan(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -45,6 +62,7 @@ class Plan(BaseModel):
     summary: str
     cells: list[ProposedCell]
     overall_warnings: list[str]
+    leakage_audit: LeakageAudit | None = None
 
 
 SYSTEM_PROMPT = """\
@@ -69,6 +87,29 @@ Hard rules:
    re-importing crashes the cell.
 8. Use Polars (preferred). Display via the existing `mo` alias. For ML use
    scikit-learn (already installed). For plotting, use altair or matplotlib.
+
+LEAKAGE AUDIT (required when a target column was named):
+When the user identified a target column, you MUST populate `leakage_audit`
+with your verdict on whether the plan is safe to train on. Specifically:
+- `target`: the target column name.
+- `columns_to_drop`: columns the plan must NOT use as features because
+  they leak the target (unique-per-row IDs, post-event timestamps,
+  duplicates of the target, columns with implausibly high |corr| with
+  the target, etc.). Look at the profile's leakage hints AND look at
+  the column semantics from names + sample values.
+- `transformations_to_audit`: transformations in your plan that could
+  leak if implemented carelessly -- e.g. "z-score within group uses
+  group means computed on the full df; recompute on train-only when
+  productionalizing", "target-encoding requires K-fold to avoid leakage",
+  "imputation on full df leaks test info into train".
+- `training_safe`: True if the plan addresses every risk you identified
+  before training (you drop the leaking columns, you flag the
+  transformations to audit, you propose a proper train/test split). False
+  if the plan would commit a model-training step without first handling
+  a known leakage risk.
+- `rationale`: one paragraph defending your `training_safe` verdict.
+
+If the user did NOT name a target, set `leakage_audit` to null.
 
 Submit your plan via the submit_plan tool. Be specific. Be honest about
 cost. Be conservative about scope -- a small set of well-considered cells
@@ -157,8 +198,63 @@ PLAN_TOOL: dict[str, Any] = {
                 "items": {"type": "string"},
                 "description": "Plan-level concerns. [] if none.",
             },
+            "leakage_audit": {
+                "anyOf": [
+                    {
+                        "type": "object",
+                        "properties": {
+                            "target": {"type": "string"},
+                            "columns_to_drop": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": (
+                                    "Columns that must NOT be used as "
+                                    "features because they leak the target."
+                                ),
+                            },
+                            "transformations_to_audit": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": (
+                                    "Specific transformations in the plan "
+                                    "that could leak if done carelessly."
+                                ),
+                            },
+                            "training_safe": {
+                                "type": "boolean",
+                                "description": (
+                                    "True iff the plan addresses every "
+                                    "identified leakage risk before "
+                                    "training. The widget blocks Apply on "
+                                    "training cells when False."
+                                ),
+                            },
+                            "rationale": {
+                                "type": "string",
+                                "description": (
+                                    "One-paragraph defense of the "
+                                    "training_safe verdict."
+                                ),
+                            },
+                        },
+                        "required": [
+                            "target",
+                            "columns_to_drop",
+                            "transformations_to_audit",
+                            "training_safe",
+                            "rationale",
+                        ],
+                        "additionalProperties": False,
+                    },
+                    {"type": "null"},
+                ],
+                "description": (
+                    "Populated when the user named a target column; null "
+                    "otherwise. See system prompt for the audit rules."
+                ),
+            },
         },
-        "required": ["summary", "cells", "overall_warnings"],
+        "required": ["summary", "cells", "overall_warnings", "leakage_audit"],
         "additionalProperties": False,
     },
 }
