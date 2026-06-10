@@ -50,7 +50,7 @@ result
 
 ## Tuning the wait
 
-Plan calls block while Claude generates. The default is **Opus 4.7 + medium effort**, ~30-45s on a warm Claude Code cache. Bench results on a leakage-prone scenario (all configs caught the leak):
+Plan calls block while Claude generates. The default is **Opus 4.8 + medium effort**, ~30-45s on a warm Claude Code cache. Bench results below (run on Opus 4.7, the prior default) on a leakage-prone scenario, all configs caught the leak:
 
 | model              | effort  | latency | cells |
 |--------------------|---------|---------|-------|
@@ -63,7 +63,7 @@ Counterintuitively, Opus is often the fastest — Claude Code's session overhead
 
 Knobs (pass to `planner_widget` or `plan`):
 
-- `effort="low"|"medium"|"high"|"xhigh"|"max"` — Opus 4.7 supports all five. `medium` is the default; `high` adds depth for hard problems; `low` is fastest.
+- `effort="low"|"medium"|"high"|"xhigh"|"max"` — Opus 4.8 supports all five. `medium` is the default; `high` adds depth for hard problems; `low` is fastest.
 - `model="claude-sonnet-4-6"` — half-price; quality holds for simple plans.
 - `backend="anthropic"` — switches to the Python SDK + your `ANTHROPIC_API_KEY`. Faster subsequent calls with prompt caching once you have credits.
 

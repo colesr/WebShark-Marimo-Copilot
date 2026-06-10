@@ -60,5 +60,8 @@ data/processed/
 *.parquet
 *.duckdb
 
+# ds-copilot runtime artifacts (decision log is regenerated per run)
+.ds_copilot/
+
 # Claude Code per-user settings (commit settings.json, ignore settings.local.json)
 .claude/settings.local.json
