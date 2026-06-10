@@ -46,3 +46,17 @@ Specifically: keep `notebooks/` clean of trial files for now and use `planner_wi
 If after two weeks you've used it 3+ times unprompted, the wedge is real and the next investment is sharpening — better cell labels in the DAG, streaming the plan as it's generated, error-recovery when a proposed cell fails. If you haven't used it, the wedge is wrong; the most likely standalone value is the profiler + leakage audit as a separate library, not the copilot.
 
 Either answer is fine. The point of decision gates is to know which one to act on.
+
+## Update — 2026-06-10
+
+Three weeks on. The open questions above have partial answers; recording them here rather than rewriting the original.
+
+**Q2 — does the LeakageAudit catch real leaks, or is the synthetic demo all it's good for? ANSWERED: yes, on real data.** Committed in `690042b` (`notebooks/02_favorita_realdata.py` + `scripts/validate_favorita*.py`). Ran the planner on the real Kaggle Favorita store-sales set with a *deliberately neutral goal* — no hint about time-splitting — where the danger is **temporal** (a random train/test split leaks future→past) and the target `sales` is continuous, so the profiler's `|corr|` and target-rate heuristics stay silent. The audit raised the temporal leak on its own reasoning, with no heuristic to lean on. This is the result the synthetic demo couldn't give: the audit isn't just pattern-matching its own planted clue. Caveat: **n=1**, one dataset, one goal phrasing. Worth a couple more neutral-goal runs on different real sets before calling it robust.
+
+**The "3+ unprompted uses" bet — partial.** Beyond Favorita there are two untracked scratch runs that count as genuine unprompted use:
+- `notebooks/scratch.py` — Seaborn penguins, baseline `species` classifier through `planner_widget` (encode → stratified split → logreg → confusion matrix → CV). Plan applied end-to-end.
+- `notebook.py` (repo root) — `datasets/stores.csv`, profiling + a `perf`-column investigation.
+
+Both deliberately left untracked, per the W5 instruction to keep `notebooks/` clean and just *use* the thing. So the count is ~3 real uses (Favorita + 2 scratch). That clears the bar I set — leaning toward "the wedge is real" — but the scratch uses were lightweight (profiling / one-shot baseline), not the multi-day sticky use that would be the strongest signal. Q1 (is the 30–45s wait acceptable when unexpected?) and Q3 (do you reach for the decision log, or is `git log` enough?) are still unanswered — I haven't caught myself opening `history()` unprompted yet.
+
+**Re-stated bet.** The leakage audit has earned its own follow-up: it cleared the real-data test that was the whole point of W5, and it's the component most likely to have standalone value. Next concrete step is *not* more building — it's 2–3 more neutral-goal audit runs on different real datasets to turn n=1 into a pattern, and one honest check of whether the decision log ever gets reached for. If the audit holds across those and the log stays unused, the sharpest product is the **profiler + leakage audit as a standalone library**, with the copilot as the delivery vehicle rather than the headline.
