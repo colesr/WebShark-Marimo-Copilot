@@ -60,6 +60,9 @@ data/processed/
 *.parquet
 *.duckdb
 
+# Large local datasets (e.g. Kaggle Favorita CSVs — 117M train.csv)
+datasets/
+
 # ds-copilot runtime artifacts (decision log is regenerated per run)
 .ds_copilot/
 
