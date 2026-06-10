@@ -37,7 +37,7 @@ pip install -e ".[dev]"
 - **`claude-cli`** (default) — shells out to the local `claude` CLI in headless mode (`claude --print --output-format json --json-schema ...`). Bills against the user's **Claude Code subscription**, so no `ANTHROPIC_API_KEY` is needed. The CLI invocation **deliberately strips `ANTHROPIC_API_KEY` from the child env** (`agent.py` `_plan_via_claude_cli`) — if the key is present the CLI prefers API auth, which is exactly what this backend exists to avoid. This is the unlock that lets the demo run with zero API credits.
 - **`anthropic`** — Anthropic Python SDK; requires `ANTHROPIC_API_KEY` (read from `.env`). Uses prompt caching.
 
-Both paths use **forced tool use** (`submit_plan` tool) for structured output and populate a `CostReport`. Default model is `claude-opus-4-7`, default effort `medium` (see README's bench table for why Opus+medium is counterintuitively the *fastest* — Claude Code's ~30K-token session cache write/read dominates short calls).
+Both paths use **forced tool use** (`submit_plan` tool) for structured output and populate a `CostReport`. Default model is `claude-opus-4-8`, default effort `medium` (see README's bench table for why Opus+medium is counterintuitively the *fastest* — Claude Code's ~30K-token session cache write/read dominates short calls).
 
 ## Architecture — the plan-then-approve pipeline
 
