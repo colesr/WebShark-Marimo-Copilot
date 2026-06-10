@@ -24,7 +24,7 @@ from ds_copilot.profiler import Profile
 CostEstimate = Literal["cheap", "medium", "expensive"]
 Backend = Literal["claude-cli", "anthropic"]
 
-DEFAULT_MODEL = "claude-opus-4-7"
+DEFAULT_MODEL = "claude-opus-4-8"
 DEFAULT_BACKEND: Backend = "claude-cli"
 
 
@@ -91,6 +91,7 @@ class Plan(BaseModel):
 # Per-million-token prices (input, output) for Anthropic-cost calculation.
 # Cache reads cost ~0.1x input; cache writes cost ~1.25x input.
 _PRICES_PER_M = {
+    "claude-opus-4-8": (5.00, 25.00),
     "claude-opus-4-7": (5.00, 25.00),
     "claude-opus-4-6": (5.00, 25.00),
     "claude-opus-4-5": (5.00, 25.00),

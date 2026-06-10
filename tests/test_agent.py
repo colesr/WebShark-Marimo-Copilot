@@ -154,7 +154,7 @@ def test_plan_request_uses_correct_parameters(tiny_profile) -> None:
     kwargs = fake.messages.last_kwargs
     assert kwargs is not None
 
-    assert kwargs["model"] == "claude-opus-4-7"
+    assert kwargs["model"] == "claude-opus-4-8"
     assert kwargs["thinking"] == {"type": "adaptive"}
     assert kwargs["output_config"] == {"effort": "medium"}
     # No removed-on-4.7 sampling params leaked into the request
@@ -294,7 +294,7 @@ def test_claude_cli_backend_parses_structured_output(
     assert args[args.index("--output-format") + 1] == "json"
     assert "--json-schema" in args
     assert "--model" in args
-    assert args[args.index("--model") + 1] == "claude-opus-4-7"
+    assert args[args.index("--model") + 1] == "claude-opus-4-8"
     assert "--effort" in args
     assert args[args.index("--effort") + 1] == "medium"
     assert "--no-session-persistence" in args

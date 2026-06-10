@@ -424,7 +424,7 @@ def planner_widget(
                 ],
             },
             "backend": plan_kwargs.get("backend", "claude-cli"),
-            "model": plan_kwargs.get("model", "claude-opus-4-7"),
+            "model": plan_kwargs.get("model", "claude-opus-4-8"),
             "effort": plan_kwargs.get("effort", "high"),
             "existing_cells": existing_cells or [],
         },

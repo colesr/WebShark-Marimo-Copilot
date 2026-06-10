@@ -64,7 +64,7 @@ def _():
             "churned": churned,
         }
     )
-    return (df,)
+    return df, pl
 
 
 @app.cell
@@ -138,9 +138,7 @@ def _(df):
                 "internet_service, churn_score, churned"
             ),
         ],
-        # effort defaults to "medium" -- bench shows it catches the leak at
-        # the same rate as "high" while running ~2.4x faster. Bump to
-        # "high" or "xhigh" when correctness matters more than wait time.
+        effort="high",
     )
     return (planner,)
 
@@ -161,6 +159,10 @@ def _(mo):
     box and re-submit. If the agent did the right thing, the plan should
     drop `churn_score` (and `customer_id`) before training and Apply
     should let you proceed without override.
+
+    *Note: clicking **Apply** materializes cells like the static baseline
+    below it. Re-clicking stacks duplicates that marimo flags as
+    redefinitions — clear the extra cells if that happens.*
     """)
     return
 
@@ -182,6 +184,97 @@ def _(mo, result):
 @app.cell
 def _(mo):
     mo.md(r"""
+    ## The applied baseline (one good plan's output)
+
+    These cells mirror what the planner proposes and Apply materializes:
+    drop the leaking columns first, then encode → split → fit → evaluate.
+    Because the leaks are gone, the ROC AUC is honest (~0.5), not the
+    misleading ~1.0 you'd get by training on `churn_score`.
+    """)
+    return
+
+
+@app.cell
+def _(df, mo):
+    leaking_cols = ["customer_id", "churn_score"]
+    feature_cols = [c for c in df.columns if c not in leaking_cols + ["churned"]]
+    mo.md(
+        f"**Dropped (leakage / ID):** {leaking_cols}\n\n"
+        f"**Features:** {feature_cols}\n\n"
+        f"**Target:** churned"
+    )
+    return (feature_cols,)
+
+
+@app.cell
+def _(df, feature_cols, mo):
+    X_df = df.select(feature_cols).to_dummies(columns=["contract_type", "internet_service"])
+    X = X_df.to_numpy()
+    y = df["churned"].to_numpy()
+    mo.md(
+        f"X shape: {X.shape}  |  y positive rate: {y.mean():.3f}\n\n"
+        f"Encoded columns:\n\n{X_df.columns}"
+    )
+    return X, y
+
+
+@app.cell
+def _(X, mo, y):
+    from sklearn.model_selection import train_test_split
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, stratify=y, random_state=42
+    )
+    mo.md(
+        f"Train: {X_train.shape}, pos rate {y_train.mean():.3f}  \n"
+        f"Test:  {X_test.shape}, pos rate {y_test.mean():.3f}"
+    )
+    return X_test, X_train, y_test, y_train
+
+
+@app.cell
+def _(X_train, mo, y_train):
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import StandardScaler
+
+    model = Pipeline([
+        ("scaler", StandardScaler()),
+        ("lr", LogisticRegression(max_iter=1000, random_state=42)),
+    ])
+    model.fit(X_train, y_train)
+    mo.md(f"Fitted. Train accuracy: {model.score(X_train, y_train):.3f}")
+    return (model,)
+
+
+@app.cell
+def _(X_test, mo, model, pl, y_test):
+    from sklearn.metrics import accuracy_score, confusion_matrix, roc_auc_score
+
+    y_pred = model.predict(X_test)
+    y_proba = model.predict_proba(X_test)[:, 1]
+    acc = accuracy_score(y_test, y_pred)
+    auc = roc_auc_score(y_test, y_proba)
+    cm = confusion_matrix(y_test, y_pred)
+    cm_df = pl.DataFrame({
+        "": ["actual_neg", "actual_pos"],
+        "pred_neg": [int(cm[0, 0]), int(cm[1, 0])],
+        "pred_pos": [int(cm[0, 1]), int(cm[1, 1])],
+    })
+    mo.vstack([
+        mo.md(
+            f"**Test accuracy:** {acc:.4f}  \n"
+            f"**Test ROC AUC:** {auc:.4f}  \n\n"
+            f"(Baseline from always predicting 0: {1 - y_test.mean():.4f})"
+        ),
+        mo.ui.table(cm_df, selection=None),
+    ])
+    return (y_pred,)
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
     ## Step 4: read the decision log
 
     Every plan/accept/reject was appended to `.ds_copilot/decisions.jsonl`.
@@ -192,130 +285,131 @@ def _(mo):
 
 
 @app.cell
-def _():
-    from ds_copilot import history
+def _(mo):
+    def _():
+        from ds_copilot import history
+        import polars as pl
 
-    events = history()
-    return (events,)
+        def summarize(e):
+            p = e.payload
+            if e.event_type == "plan_requested":
+                return f"goal={str(p.get('goal', ''))[:50]}... target={p.get('target')}"
+            if e.event_type == "plan_returned":
+                audit = p.get("leakage_audit") or {}
+                return (
+                    f"{len(p.get('cells', []))} cells; "
+                    f"training_safe={audit.get('training_safe')}; "
+                    f"drops={audit.get('columns_to_drop', [])}"
+                )
+            if e.event_type == "cells_applied":
+                return (
+                    f"applied {len(p.get('applied_titles', []))} cells "
+                    f"(override={p.get('override_used', False)})"
+                )
+            return ""
 
-
-@app.cell
-def _(events, mo):
-    rows = [
-        {
-            "ts": e.timestamp.isoformat(),
-            "session": e.session_id[:8],
-            "type": e.event_type,
-            "summary": _summarize_event(e),
-        }
-        for e in events[-20:]
-    ]
-
-    import polars as pl
-
-    mo.vstack(
-        [
-            mo.md(f"### Decision history — last {len(rows)} of {len(events)} events"),
-            pl.DataFrame(rows) if rows else mo.md("_(no events yet)_"),
+        events = history()
+        rows = [
+            {
+                "ts": e.timestamp.isoformat(),
+                "session": e.session_id[:8],
+                "type": e.event_type,
+                "summary": summarize(e),
+            }
+            for e in events[-20:]
         ]
-    )
-    return
+        return mo.vstack(
+            [
+                mo.md(
+                    f"### Decision history — last {len(rows)} of "
+                    f"{len(events)} events"
+                ),
+                pl.DataFrame(rows) if rows else mo.md("_(no events yet)_"),
+            ]
+        )
 
-
-@app.cell
-def _():
-    def _summarize_event(event) -> str:
-        p = event.payload
-        if event.event_type == "plan_requested":
-            return f"goal={p.get('goal', '')[:60]}... target={p.get('target')}"
-        if event.event_type == "plan_returned":
-            audit = p.get("leakage_audit") or {}
-            ts = audit.get("training_safe")
-            drops = audit.get("columns_to_drop", [])
-            return (
-                f"{len(p.get('cells', []))} cells; "
-                f"training_safe={ts}; drops={drops}"
-            )
-        if event.event_type == "cells_applied":
-            n_applied = len(p.get("applied_titles", []))
-            override = p.get("override_used", False)
-            return f"applied {n_applied} cells (override={override})"
-        return ""
-
-    return
-
-
-@app.cell(hide_code=True)
-def _(df, mo):
-    leaking_cols = ['customer_id', 'churn_score']
-    feature_cols = [c for c in df.columns if c not in leaking_cols + ['churned']]
-    categorical_cols = ['contract_type', 'internet_service']
-    numeric_cols = ['tenure_months', 'monthly_charges']
-    mo.md(f"**Dropped (leakage / ID):** {leaking_cols}\n\n**Features:** {feature_cols}\n\n**Target:** churned")
-    return categorical_cols, feature_cols
-
-
-@app.cell(hide_code=True)
-def _(categorical_cols, df, feature_cols, mo):
-    X_df = df.select(feature_cols).to_dummies(columns=categorical_cols)
-    y = df['churned'].to_numpy()
-    X = X_df.to_numpy()
-    mo.md(f"X shape: {X.shape}  |  y positive rate: {y.mean():.3f}\n\nEncoded columns:\n\n{X_df.columns}")
-    return X, y
-
-
-@app.cell(hide_code=True)
-def _(X, mo, y):
-    from sklearn.model_selection import train_test_split
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, stratify=y, random_state=42
-    )
-    mo.md(f"Train: {X_train.shape}, pos rate {y_train.mean():.3f}  \nTest:  {X_test.shape}, pos rate {y_test.mean():.3f}")
-    return X_test, X_train, y_test, y_train
-
-
-@app.cell(hide_code=True)
-def _(X_train, mo, y_train):
-    from sklearn.linear_model import LogisticRegression
-    from sklearn.pipeline import Pipeline
-    from sklearn.preprocessing import StandardScaler
-
-    model = Pipeline([
-        ('scale', StandardScaler()),
-        ('lr', LogisticRegression(max_iter=1000, random_state=42)),
-    ])
-    model.fit(X_train, y_train)
-    mo.md(f"Fitted. Train accuracy: {model.score(X_train, y_train):.3f}")
-    return (model,)
-
-
-@app.cell(hide_code=True)
-def _(X_test, mo, model, y_test):
-    from sklearn.metrics import accuracy_score, roc_auc_score, confusion_matrix
-
-    y_pred = model.predict(X_test)
-    y_proba = model.predict_proba(X_test)[:, 1]
-
-    acc = accuracy_score(y_test, y_pred)
-    auc = roc_auc_score(y_test, y_proba)
-    cm = confusion_matrix(y_test, y_pred)
-
-    mo.md(
-        f"**Test accuracy:** {acc:.3f}  \n"
-        f"**Test ROC AUC:** {auc:.3f}  \n\n"
-        f"**Confusion matrix** (rows=true, cols=pred):  \n\n"
-        f"|        | pred 0 | pred 1 |\n"
-        f"|--------|--------|--------|\n"
-        f"| true 0 | {cm[0,0]} | {cm[0,1]} |\n"
-        f"| true 1 | {cm[1,0]} | {cm[1,1]} |\n"
-    )
+    _()
     return
 
 
 @app.cell
 def _():
     from ds_copilot import dag_widget
+
     dag_widget("notebooks/01_demo_churn.py")
+    return
+
+
+@app.cell(hide_code=True)
+def _(df, mo):
+    feature_cols = ["tenure_months", "monthly_charges", "contract_type", "internet_service"]
+    X_raw = df.select(feature_cols)
+    y = df.select("churned").to_series()
+    mo.md(f"**Features kept:** {feature_cols}  \n**Dropped (leakage):** `customer_id` (ID), `churn_score` (|corr|=1.0 with target)  \n**Rows:** {X_raw.height}, **Positive rate:** {y.mean():.3f}")
+    return X_raw, feature_cols, y
+
+
+@app.cell(hide_code=True)
+def _(X_raw, mo):
+    X_encoded = X_raw.to_dummies(columns=["contract_type", "internet_service"], drop_first=True)
+    mo.md(f"**Encoded feature matrix shape:** {X_encoded.shape}  \n**Columns:** {X_encoded.columns}")
+    return (X_encoded,)
+
+
+@app.cell(hide_code=True)
+def _(X_encoded, mo, y):
+    from sklearn.model_selection import train_test_split
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X_encoded.to_numpy(),
+        y.to_numpy(),
+        test_size=0.2,
+        stratify=y.to_numpy(),
+        random_state=42,
+    )
+    mo.md(f"**Train:** {X_train.shape[0]} rows | **Test:** {X_test.shape[0]} rows | **Train pos rate:** {y_train.mean():.3f} | **Test pos rate:** {y_test.mean():.3f}")
+    return X_test, X_train, y_test, y_train
+
+
+@app.cell(hide_code=True)
+def _(X_train, mo, y_train):
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.linear_model import LogisticRegression
+
+    model = Pipeline([
+        ("scaler", StandardScaler()),
+        ("clf", LogisticRegression(max_iter=1000, random_state=42)),
+    ])
+    model.fit(X_train, y_train)
+    mo.md("**Logistic regression fit complete** — StandardScaler + LogisticRegression(max_iter=1000)")
+    return (model,)
+
+
+@app.cell(hide_code=True)
+def _(X_test, mo, model, y_test):
+    from sklearn.metrics import accuracy_score, roc_auc_score
+
+    y_pred = model.predict(X_test)
+    y_proba = model.predict_proba(X_test)[:, 1]
+    acc = accuracy_score(y_test, y_pred)
+    auc = roc_auc_score(y_test, y_proba)
+    mo.md(f"### Test-set metrics\n- **Accuracy:** {acc:.4f}\n- **ROC AUC:** {auc:.4f}")
+    return (y_pred,)
+
+
+@app.cell(hide_code=True)
+def _(mo, pl, y_pred, y_test):
+    from sklearn.metrics import confusion_matrix
+    import polars as _pl  # alias-safe; uses existing pl
+
+    cm = confusion_matrix(y_test, y_pred)
+    cm_df = pl.DataFrame({
+        "": ["actual: no churn", "actual: churn"],
+        "pred: no churn": [int(cm[0, 0]), int(cm[1, 0])],
+        "pred: churn": [int(cm[0, 1]), int(cm[1, 1])],
+    })
+    mo.vstack([mo.md("### Confusion matrix (test set)"), mo.ui.table(cm_df)])
     return
 
 
