@@ -34,6 +34,8 @@ if hasattr(sys.stdout, "reconfigure"):
 
 
 def main() -> None:
+    effort = sys.argv[1] if len(sys.argv) > 1 else "medium"
+    print(f"effort = {effort}")
     bank = fetch_ucirepo(id=222)
     pdf = bank.data.features.copy()
     pdf["y"] = bank.data.targets.iloc[:, 0]
@@ -69,7 +71,7 @@ def main() -> None:
                 "did the client subscribe, yes/no)"
             ),
         ],
-        effort="high",
+        effort=effort,
     )
     print(f"Got plan in {time.monotonic() - started:.1f}s\n")
 
