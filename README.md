@@ -1,4 +1,4 @@
-# ds-copilot
+# WebShark Marimo ds-copilot 🦈
 
 A plan-first AI copilot for [Marimo](https://marimo.io) reactive data-science notebooks. Built on top of [marimo-pair](https://github.com/marimo-team/marimo-pair) — fills the gaps marimo-pair doesn't: structured schema profiling, plan-then-approve workflows, leakage audits before any model fits, and append-only decision provenance.
 
